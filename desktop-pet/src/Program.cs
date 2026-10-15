@@ -7,9 +7,16 @@ using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
+
+[assembly: AssemblyTitle("麻糬桌寵")]
+[assembly: AssemblyProduct("麻糬 Desktop Pet")]
+[assembly: AssemblyDescription("住在工作列上的麻糬貓")]
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
 
 namespace DesktopPet
 {
