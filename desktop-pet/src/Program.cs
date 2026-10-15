@@ -8,8 +8,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("麻糬桌寵")]
 [assembly: AssemblyProduct("麻糬 Desktop Pet")]
 [assembly: AssemblyDescription("住在工作列上的桌面寵物")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.2.1.0")]
+[assembly: AssemblyFileVersion("1.2.1.0")]
 
 namespace DesktopPet
 {

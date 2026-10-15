@@ -17,6 +17,7 @@ namespace DesktopPet
         readonly Stopwatch clock = new Stopwatch();
         readonly Random rnd = new Random();
         SpeechSynthesizer tts;
+        bool ttsUnavailable;
         Prompt ttsPrompt;
         Mouth ttsMouth;
         long ttsMouthUntilMs;
@@ -81,12 +82,20 @@ namespace DesktopPet
 
         void SpeakText(string text)
         {
+            if (ttsUnavailable) return;
             if (tts == null)
             {
                 try
                 {
                     tts = new SpeechSynthesizer();
-                    SelectVoice(tts);
+                    if (!SelectVoice(tts))
+                    {
+                        // Without a Chinese voice the default (English) one would mangle the lines; stay silent.
+                        tts.Dispose();
+                        tts = null;
+                        ttsUnavailable = true;
+                        return;
+                    }
                     tts.SetOutputToDefaultAudioDevice();
                     tts.VisemeReached += OnViseme;
                     tts.SpeakCompleted += delegate(object s, SpeakCompletedEventArgs e)
@@ -97,6 +106,7 @@ namespace DesktopPet
                 catch (Exception)
                 {
                     tts = null; // no speech engine available: stay silent
+                    ttsUnavailable = true;
                     return;
                 }
             }
@@ -123,16 +133,17 @@ namespace DesktopPet
             }
         }
 
-        static void SelectVoice(SpeechSynthesizer s)
+        static bool SelectVoice(SpeechSynthesizer s)
         {
             foreach (InstalledVoice v in s.GetInstalledVoices())
             {
                 if (v.Enabled && v.VoiceInfo.Culture.Name.StartsWith("zh") && v.VoiceInfo.Gender == VoiceGender.Female)
                 {
                     s.SelectVoice(v.VoiceInfo.Name);
-                    return;
+                    return true;
                 }
             }
+            return false;
         }
 
         // RMS loudness per 1/60 s of a 16-bit PCM WAV, normalized so the loudest window is 1.
