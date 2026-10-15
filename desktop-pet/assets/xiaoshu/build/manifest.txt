@@ -1,11 +1,10 @@
 base base.png
-patch eyes_closed eyes_closed.png 141.65 127.91
-patch mouth_small mouth_small.png 190.58 169.12
-patch mouth_a mouth_a.png 188.01 169.12
-patch mouth_o mouth_o.png 190.58 169.12
-patch happy_eyes happy_eyes.png 141.65 127.91
-patch happy_mouth happy_mouth.png 182.86 163.97
-patch surprised_eyes surprised_eyes.png 146.8 122.76
-patch surprised_mouth surprised_mouth.png 190.58 169.12
-zone mouth 188.01 169.12 16.31 13.74
-zone eyes 141.65 127.91 106.45 29.19
+patch eyes_closed eyes_closed.png 185.26 153.56
+patch eyes_half eyes_half.png 185.26 153.56
+patch mouth_small mouth_small.png 241.73 215.98
+patch mouth_a mouth_a.png 238.76 213
+patch mouth_o mouth_o.png 247.68 218.95
+patch happy_eyes happy_eyes.png 185.26 153.56
+patch happy_mouth happy_mouth.png 235.79 210.03
+zone mouth 238.76 213 27.74 27.74
+zone eyes 185.26 153.56 137.71 36.66

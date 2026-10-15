@@ -67,7 +67,7 @@ zoom, or redraw anything except:
 | `mouth_a.png` | `the mouth open wide as if saying "ah", a little tongue visible.` | 說話（大聲） |
 | `mouth_o.png` | `a small round "oh" mouth.` | 說話（變化） |
 | `face_happy.png` | `the eyes and mouth only: happy closed eyes shaped like ^ ^ and a big open joyful smile.` | 被摸、吃東西 |
-| `face_surprised.png` | `the eyes, eyebrows and mouth only: wide eyes, slightly worried eyebrows, small open "o" mouth.` | 被抓起來 |
+| `face_surprised.png` | `the eyes, eyebrows and mouth only: wide eyes, slightly worried eyebrows, small open "o" mouth.` | 被拖曳換位置時（可省略，省略就維持平常表情） |
 
 只有 `base.png` 是必要的，缺少的變體會自動略過或用相近的表情代替。
 編輯後整張圖偏移幾個像素沒關係，工具會自動對齊；若某張改動太多，工具會顯示 WARNING，重新生成那一張即可。

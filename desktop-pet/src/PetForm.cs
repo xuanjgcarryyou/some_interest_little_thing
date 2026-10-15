@@ -37,8 +37,6 @@ namespace DesktopPet
         ToolStripMenuItem hungerItem, feedItem, sleepItem, followItem, transformItem, muteItem, homeItem;
         Character character;
 
-        // Where an anchored character lives (feet position); NaN until placed.
-        float anchorX = float.NaN, anchorY = float.NaN;
         // Gaze: follows the cursor while it's moving nearby, otherwise wanders.
         float gazeX, gazeY, idleGazeX, idleGazeY;
         int gazeTimer, cursorStill;
@@ -183,15 +181,7 @@ namespace DesktopPet
         {
             mouseDown = false;
             idleFrames = 0;
-            if (dragMoved && character.Anchored)
-            {
-                // Stays where it's dropped.
-                anchorX = cx;
-                anchorY = footY;
-                vx = vy = 0;
-                SetState(PetState.Idle, Fps);
-            }
-            else if (dragMoved)
+            if (dragMoved)
             {
                 vx = Clamp(vx, -30 * S, 30 * S);
                 vy = Clamp(vy, -30 * S, 30 * S);
@@ -250,6 +240,7 @@ namespace DesktopPet
 
         void UpdateDrag(float ground)
         {
+            if (character.Anchored) return; // a VTuber stays where she's placed; she isn't picked up like a pet
             Point p = Cursor.Position;
             if (!dragMoved)
             {
@@ -313,21 +304,15 @@ namespace DesktopPet
             gazeY += (ty - gazeY) * 0.1f;
         }
 
-        // Puts an anchored character at its saved spot, or the bottom-right corner above the taskbar.
+        // Anchored characters sit in a bottom corner of the primary screen, right above the taskbar.
+        bool anchorLeft;
+
         void SnapToAnchor()
         {
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
-            bool onScreen = false;
-            if (!float.IsNaN(anchorX))
-                foreach (Screen s in Screen.AllScreens)
-                    if (s.Bounds.Contains((int)anchorX, (int)anchorY - 10)) onScreen = true;
-            if (!onScreen)
-            {
-                anchorX = wa.Right - character.BodyWidth(S) / 2 - 10 * S;
-                anchorY = wa.Bottom;
-            }
-            cx = anchorX;
-            footY = anchorY;
+            float half = character.BodyWidth(S) / 2 + 10 * S;
+            cx = anchorLeft ? wa.Left + half : wa.Right - half;
+            footY = wa.Bottom;
             vx = vy = 0;
             SetState(PetState.Idle, Fps);
         }
@@ -510,9 +495,8 @@ namespace DesktopPet
         {
             if (character.Anchored)
             {
-                anchorX = float.NaN;
+                anchorLeft = !anchorLeft; // the menu item swaps corners
                 SnapToAnchor();
-                Say("我回來了！", Fps * 2);
                 return;
             }
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
@@ -598,7 +582,7 @@ namespace DesktopPet
                 transformItem.Enabled = state != PetState.Drag && state != PetState.Fall && state != PetState.Transform;
                 followItem.Checked = followMouse;
                 followItem.Visible = !character.Anchored;
-                homeItem.Text = character.Anchored ? "回到右下角" : "叫回螢幕中間";
+                homeItem.Text = !character.Anchored ? "叫回螢幕中間" : anchorLeft ? "移到右下角" : "移到左下角";
                 muteItem.Visible = character.HasVoice;
                 muteItem.Checked = voice.Muted;
                 sleepItem.Text = state == PetState.Sleep ? "叫醒" + character.Name : "去睡覺";
@@ -868,7 +852,7 @@ namespace DesktopPet
             return SystemFonts.DefaultFont.FontFamily;
         }
 
-        // State file: hunger;savedAtUtcTicks;characterId;form;muted;anchorX;anchorY. Hunger drains slowly while closed.
+        // State file: hunger;savedAtUtcTicks;characterId;form;muted;anchorLeft. Hunger drains slowly while closed.
         void LoadState()
         {
             try
@@ -886,11 +870,7 @@ namespace DesktopPet
                     character.Form = int.Parse(parts[3], CultureInfo.InvariantCulture);
                 }
                 if (parts.Length >= 5) voice.Muted = parts[4] == "1";
-                if (parts.Length >= 7)
-                {
-                    anchorX = float.Parse(parts[5], CultureInfo.InvariantCulture);
-                    anchorY = float.Parse(parts[6], CultureInfo.InvariantCulture);
-                }
+                if (parts.Length >= 6) anchorLeft = parts[5] == "L";
             }
             catch { }
         }
@@ -899,8 +879,8 @@ namespace DesktopPet
         {
             try
             {
-                File.WriteAllText(statePath, string.Format(CultureInfo.InvariantCulture, "{0};{1};{2};{3};{4};{5};{6}",
-                    hunger, DateTime.UtcNow.Ticks, character.Id, character.Form, voice.Muted ? 1 : 0, anchorX, anchorY));
+                File.WriteAllText(statePath, string.Format(CultureInfo.InvariantCulture, "{0};{1};{2};{3};{4};{5}",
+                    hunger, DateTime.UtcNow.Ticks, character.Id, character.Form, voice.Muted ? 1 : 0, anchorLeft ? "L" : "R"));
             }
             catch { }
         }

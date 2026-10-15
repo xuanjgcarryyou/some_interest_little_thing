@@ -144,7 +144,11 @@ namespace DesktopPet
             {
                 case PetState.Sleep: eyes = "eyes_closed"; break;
                 case PetState.Happy: eyes = "happy_eyes"; mouth = "happy_mouth"; break;
-                case PetState.Drag: eyes = "surprised_eyes"; mouth = "surprised_mouth"; break;
+                case PetState.Drag:
+                    // Being moved is optional drama: without surprised art she just keeps her usual face.
+                    if (patches.ContainsKey("surprised_eyes")) eyes = "surprised_eyes";
+                    if (patches.ContainsKey("surprised_mouth")) mouth = "surprised_mouth";
+                    break;
                 case PetState.Eat: eyes = "happy_eyes"; mouth = (v.StateTimer / 6) % 2 == 0 ? "mouth_a" : null; break;
                 default:
                     if (v.Blink) eyes = v.BlinkPhase == 1 ? "eyes_closed" : "eyes_half";
@@ -225,7 +229,7 @@ namespace DesktopPet
         }
 
         // Inverse-maps every output pixel to where it comes from in the composed frame.
-        void Warp(PetView v)
+        unsafe void Warp(PetView v)
         {
             int w = frame.Width, h = frame.Height;
             float S = v.S, t = v.Tick;
@@ -238,7 +242,9 @@ namespace DesktopPet
             float sway = (float)Math.Sin(t * 0.013) * 1.2f * S;
             float[] hairWave = new float[h];
             for (int y = 0; y < h; y++) hairWave[y] = (float)Math.Sin(t * 0.09 + y * 0.04) * 1.3f * S;
+            float sideStart = faceR * 1.05f, sideRange = faceR * 0.6f;
 
+            fixed (int* src = srcPx, dst = dstPx)
             for (int y = 0; y < h; y++)
             {
                 // Only the columns the character can reach on this row (looking a few rows up and down).
@@ -254,10 +260,11 @@ namespace DesktopPet
 
                 float up = (float)(h - y) / h; // 0 at the bottom edge, 1 at the top
                 float wHead = SmoothStep((neckY + neckBand - y) / (2 * neckBand));
+                float rowDx = sway * up, rowDy = -breath * up, hw = hairWave[y];
                 int row = y * w;
                 for (int x = x0; x <= x1; x++)
                 {
-                    float dx = sway * up, dy = -breath * up;
+                    float dx = rowDx, dy = rowDy;
                     if (wHead > 0)
                     {
                         // Roll around the neck (small-angle rotation), weighted so the shoulders stay put.
@@ -273,10 +280,10 @@ namespace DesktopPet
                             dy += pitchPx * wf;
                         }
                     }
-                    float side = Math.Abs(x - faceX) - faceR * 1.05f;
-                    if (side > 0) dx += hairWave[y] * Math.Min(1f, side / (faceR * 0.6f));
+                    float side = (x > faceX ? x - faceX : faceX - x) - sideStart;
+                    if (side > 0) dx += side < sideRange ? hw * side / sideRange : hw;
 
-                    dstPx[row + x] = Sample(x - dx, y - dy, w, h);
+                    dst[row + x] = Sample(src, x - dx, y - dy, w, h);
                 }
             }
 
@@ -286,15 +293,16 @@ namespace DesktopPet
         }
 
         // Bilinear sample of premultiplied ARGB. Below the frame we clamp, so the cut-off body stays solid.
-        int Sample(float sx, float sy, int w, int h)
+        static unsafe int Sample(int* src, float sx, float sy, int w, int h)
         {
             if (sy > h - 1.001f) sy = h - 1.001f;
-            int x0 = (int)Math.Floor(sx), y0 = (int)Math.Floor(sy);
-            if (x0 < 0 || y0 < 0 || x0 + 1 >= w) return 0;
+            if (sx < 0 || sy < 0) return 0;
+            int x0 = (int)sx, y0 = (int)sy;
+            if (x0 + 1 >= w) return 0;
+            int* p = src + y0 * w + x0;
+            int c00 = p[0], c10 = p[1], c01 = p[w], c11 = p[w + 1];
+            if (c00 == c10 && c00 == c01 && c00 == c11) return c00; // flat color (or empty): nothing to blend
             int fx = (int)((sx - x0) * 256), fy = (int)((sy - y0) * 256);
-            int i = y0 * w + x0;
-            int c00 = srcPx[i], c10 = srcPx[i + 1], c01 = srcPx[i + w], c11 = srcPx[i + w + 1];
-            if ((c00 | c10 | c01 | c11) == 0) return 0;
             int w00 = (256 - fx) * (256 - fy), w10 = fx * (256 - fy), w01 = (256 - fx) * fy, w11 = fx * fy;
             int ca = (((c00 >> 24) & 255) * w00 + ((c10 >> 24) & 255) * w10 + ((c01 >> 24) & 255) * w01 + ((c11 >> 24) & 255) * w11) >> 16;
             int cr = (((c00 >> 16) & 255) * w00 + ((c10 >> 16) & 255) * w10 + ((c01 >> 16) & 255) * w01 + ((c11 >> 16) & 255) * w11) >> 16;

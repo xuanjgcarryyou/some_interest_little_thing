@@ -23,7 +23,7 @@ if (Test-Path $AssetsRoot) {
 }
 
 $wpf = Join-Path (Split-Path $csc) 'WPF' # System.Speech.dll lives here
-& $csc /nologo /target:winexe /codepage:65001 /optimize+ /out:$out "/lib:$wpf" `
+& $csc /nologo /target:winexe /codepage:65001 /optimize+ /unsafe /out:$out "/lib:$wpf" `
     /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Speech.dll `
     @resources (Join-Path $PSScriptRoot 'src\*.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
