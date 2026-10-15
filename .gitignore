@@ -1,0 +1,17 @@
+# Build output
+bin/
+obj/
+
+# Runtime state written by the apps
+*-state.txt
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.vs/
+*.user
+Thumbs.db
+desktop.ini

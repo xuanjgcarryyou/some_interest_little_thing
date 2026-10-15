@@ -1,0 +1,5 @@
+# Keep LF everywhere so scripts work inside WSL / Docker containers.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.exe binary
