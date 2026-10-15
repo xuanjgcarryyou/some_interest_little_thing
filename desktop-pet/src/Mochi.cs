@@ -132,6 +132,13 @@ namespace DesktopPet
             using (Pen mouth = Ink.OutlinePen(S, 2f))
             using (SolidBrush inside = new SolidBrush(MouthColor))
             {
+                if (v.Speaking && v.State != PetState.Eat && v.Mouth != Mouth.Closed)
+                {
+                    float mw = v.Mouth == Mouth.O ? 7 * S : 10 * S, mh = v.Mouth == Mouth.Small ? 4 * S : 9 * S;
+                    g.FillEllipse(inside, fx - mw / 2, my - 1 * S, mw, mh);
+                    g.DrawEllipse(mouth, fx - mw / 2, my - 1 * S, mw, mh);
+                    return;
+                }
                 switch (v.State)
                 {
                     case PetState.Eat:

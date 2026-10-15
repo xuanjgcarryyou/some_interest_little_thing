@@ -14,6 +14,9 @@ namespace DesktopPet
         public float Squash = 1f;
         public bool Blink, Hungry;
         public PointF Look;     // pupil offset toward the cursor
+        public float VX;        // horizontal movement this frame, px
+        public bool Speaking;
+        public Mouth Mouth;     // lip-sync shape while speaking
     }
 
     class PetLines
@@ -36,9 +39,14 @@ namespace DesktopPet
         public virtual float SpeedFactor { get { return 1f; } }
         public virtual bool AlwaysSteaming { get { return false; } }
         public virtual float ShadowWidth { get { return 80f; } }
+        // Characters with a voice speak their lines: a recorded clip when there is one, text-to-speech otherwise.
+        public virtual bool HasVoice { get { return false; } }
+        public virtual byte[] VoiceClip(string text) { return null; }
 
         // Distance from the feet to the top of the head (unscaled px * S); the speech bubble sits above it.
         public abstract float HeadHeight(float S);
+        // Widest the character gets, including arms/capes and squash.
+        public virtual float BodyWidth(float S) { return 150 * S; }
         // Where steam puffs come out, relative to the feet.
         public virtual PointF[] SteamVents(float S) { return new PointF[0]; }
         // Draws the character with its feet at (v.X, v.Y).
@@ -162,6 +170,21 @@ namespace DesktopPet
                 g.FillEllipse(candy, x - r, y - r, r * 2, r * 2);
                 g.DrawArc(swirl, x - r * 0.55f, y - r * 0.55f, r * 1.1f, r * 1.1f, 200, 220);
                 g.DrawEllipse(o, x - r, y - r, r * 2, r * 2);
+            }
+        }
+
+        // A round mochi (daifuku) with a peek of red-bean filling.
+        public static void Daifuku(Graphics g, float x, float y, int bites, float S)
+        {
+            if (bites <= 0) return;
+            float r = (5 + bites * 2.5f) * S;
+            using (Pen o = OutlinePen(S, 2f))
+            using (SolidBrush rice = new SolidBrush(Color.FromArgb(255, 250, 250)))
+            using (SolidBrush bean = new SolidBrush(Color.FromArgb(150, 70, 80)))
+            {
+                g.FillEllipse(rice, x - r, y - r * 0.85f, r * 2, r * 1.7f);
+                g.DrawEllipse(o, x - r, y - r * 0.85f, r * 2, r * 1.7f);
+                if (bites < 3) g.FillEllipse(bean, x - r * 0.35f, y - r * 0.3f, r * 0.7f, r * 0.5f);
             }
         }
 

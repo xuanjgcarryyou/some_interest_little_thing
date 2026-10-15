@@ -25,17 +25,18 @@ namespace DesktopPet
         readonly Random rnd = new Random();
         readonly List<Particle> particles = new List<Particle>();
         readonly List<int> recentClicks = new List<int>();
-        readonly Character[] characters = { new Mochi(), new Buu() };
+        readonly List<Character> characters = new List<Character> { new Mochi(), new Buu() };
         readonly PetView view = new PetView();
+        readonly Voice voice = new Voice();
         readonly System.Windows.Forms.Timer timer;
         readonly NotifyIcon tray;
         readonly string statePath;
         readonly List<ToolStripMenuItem> characterItems = new List<ToolStripMenuItem>();
-        ToolStripMenuItem hungerItem, feedItem, sleepItem, followItem, transformItem;
+        ToolStripMenuItem hungerItem, feedItem, sleepItem, followItem, transformItem, muteItem;
         Character character;
 
         // World position = screen coords of the pet's foot center.
-        float cx, footY, vx, vy;
+        float cx, footY, vx, vy, lastCx;
         int dir = 1;
         PetState state;
         int stateTimer, tick, idleFrames, flashFrames;
@@ -53,8 +54,18 @@ namespace DesktopPet
         public PetForm()
         {
             using (Graphics g = Graphics.FromHwnd(IntPtr.Zero)) S = g.DpiX / 96f;
-            W = (int)(240 * S);
-            H = (int)(260 * S);
+            Character sprite = Xiaoshu.TryCreate(); // only present when the exe was built with its art
+            if (sprite != null) characters.Add(sprite);
+
+            // Tall enough for the tallest character plus a speech bubble above its head, wide enough for the widest.
+            float tallest = 0, widest = 0;
+            foreach (Character c in characters)
+            {
+                tallest = Math.Max(tallest, c.HeadHeight(S));
+                widest = Math.Max(widest, c.BodyWidth(S));
+            }
+            W = (int)Math.Max(240 * S, widest);
+            H = (int)(tallest + 110 * S);
             FootMargin = (int)(8 * S);
 
             FormBorderStyle = FormBorderStyle.None;
@@ -83,6 +94,7 @@ namespace DesktopPet
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
             cx = wa.Left + wa.Width * 0.75f;
             footY = wa.Top + 120 * S;
+            lastCx = cx;
             SetState(PetState.Fall, 0);
 
             timer = new System.Windows.Forms.Timer();
@@ -114,6 +126,7 @@ namespace DesktopPet
         {
             timer.Stop();
             SaveState();
+            voice.Dispose();
             tray.Visible = false;
             tray.Dispose();
             base.OnFormClosing(e);
@@ -191,8 +204,10 @@ namespace DesktopPet
             if (flashFrames > 0) flashFrames--;
             if (--blinkTimer < 0) blinkTimer = rnd.Next(60, 150);
             if (bubbleFrames > 0) bubbleFrames--;
+            if (voice.IsSpeaking && bubbleFrames < 10) bubbleFrames = 10; // keep the bubble up until the line is finished
             UpdateParticles();
             Render(ground);
+            lastCx = cx;
         }
 
         void UpdateDrag(float ground)
@@ -219,7 +234,7 @@ namespace DesktopPet
                 if (tick % 6 == 0) SpawnSteam();
             }
             else if (tick % 12 == 0)
-                Spawn(ParticleKind.Sweat, (rnd.Next(2) == 0 ? -1 : 1) * 36 * S, -80 * S);
+                Spawn(ParticleKind.Sweat, (rnd.Next(2) == 0 ? -1 : 1) * 36 * S, -(character.HeadHeight(S) - 16 * S));
         }
 
         void UpdateIdle()
@@ -298,7 +313,7 @@ namespace DesktopPet
 
         void UpdateHappy()
         {
-            if (stateTimer % 9 == 0) Spawn(ParticleKind.Heart, (float)(rnd.NextDouble() - 0.5) * 60 * S, -70 * S);
+            if (stateTimer % 9 == 0) Spawn(ParticleKind.Heart, (float)(rnd.NextDouble() - 0.5) * 60 * S, -(character.HeadHeight(S) - 22 * S));
             if (--stateTimer <= 0) SetState(PetState.Idle, Fps * 2);
         }
 
@@ -450,6 +465,12 @@ namespace DesktopPet
                 switchMenu.DropDownItems.Add(item);
             }
             m.Items.Add(switchMenu);
+            muteItem = new ToolStripMenuItem("靜音", null, delegate
+            {
+                voice.Muted = !voice.Muted;
+                if (voice.Muted) voice.Stop();
+            });
+            m.Items.Add(muteItem);
             m.Items.Add("叫回螢幕中間", null, delegate { BringHome(); });
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("掰掰（結束）", null, delegate { Close(); });
@@ -462,6 +483,8 @@ namespace DesktopPet
                 transformItem.Text = character.Lines.TransformMenu ?? "變身！";
                 transformItem.Enabled = state != PetState.Drag && state != PetState.Fall && state != PetState.Transform;
                 followItem.Checked = followMouse;
+                muteItem.Visible = character.HasVoice;
+                muteItem.Checked = voice.Muted;
                 sleepItem.Text = state == PetState.Sleep ? "叫醒" + character.Name : "去睡覺";
                 foreach (ToolStripMenuItem item in characterItems) item.Checked = item.Tag == character;
             };
@@ -562,6 +585,9 @@ namespace DesktopPet
             view.Blink = blinkTimer < 4;
             view.Hungry = hunger < 30;
             view.Look = LookOffset();
+            view.VX = cx - lastCx;
+            view.Speaking = voice.IsSpeaking;
+            view.Mouth = view.Speaking ? voice.CurrentMouth() : Mouth.Closed;
         }
 
         void UpdateLayered(int x, int y)
@@ -713,7 +739,13 @@ namespace DesktopPet
 
         void SetState(PetState s, int frames) { state = s; stateTimer = frames; }
 
-        void Say(string text, int frames) { bubbleText = text; bubbleFrames = frames; }
+        void Say(string text, int frames)
+        {
+            bubbleText = text;
+            bubbleFrames = frames;
+            if (character.HasVoice) voice.Speak(character.VoiceClip(text), text);
+            else voice.Stop();
+        }
 
         string Pick(string[] lines) { return lines[rnd.Next(lines.Length)]; }
 
@@ -728,7 +760,7 @@ namespace DesktopPet
             return SystemFonts.DefaultFont.FontFamily;
         }
 
-        // State file: hunger;savedAtUtcTicks;characterId;form. Hunger drains slowly while closed.
+        // State file: hunger;savedAtUtcTicks;characterId;form;muted. Hunger drains slowly while closed.
         void LoadState()
         {
             try
@@ -745,6 +777,7 @@ namespace DesktopPet
                         if (c.Id == parts[2]) character = c;
                     character.Form = int.Parse(parts[3], CultureInfo.InvariantCulture);
                 }
+                if (parts.Length >= 5) voice.Muted = parts[4] == "1";
             }
             catch { }
         }
@@ -753,8 +786,8 @@ namespace DesktopPet
         {
             try
             {
-                File.WriteAllText(statePath, string.Format(CultureInfo.InvariantCulture, "{0};{1};{2};{3}",
-                    hunger, DateTime.UtcNow.Ticks, character.Id, character.Form));
+                File.WriteAllText(statePath, string.Format(CultureInfo.InvariantCulture, "{0};{1};{2};{3};{4}",
+                    hunger, DateTime.UtcNow.Ticks, character.Id, character.Form, voice.Muted ? 1 : 0));
             }
             catch { }
         }
