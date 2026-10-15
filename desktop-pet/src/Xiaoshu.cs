@@ -55,7 +55,7 @@ namespace DesktopPet
                 Sleepy = text["sleepy"],
                 Wake = text["wake"],
             };
-            return SpriteCharacter.TryLoad("xiaoshu", "小糬", lines, clipByText);
+            return SpriteCharacter.TryLoad("xiaoshu", "小糬", lines, clipByText, 400f, true);
         }
     }
 }

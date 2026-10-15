@@ -17,6 +17,8 @@ namespace DesktopPet
         public float VX;        // horizontal movement this frame, px
         public bool Speaking;
         public Mouth Mouth;     // lip-sync shape while speaking
+        public int BlinkPhase;  // while Blink: 0 = half-closed, 1 = fully closed
+        public PointF Gaze;     // where it's looking, -1..1 on each axis
     }
 
     class PetLines
@@ -41,6 +43,8 @@ namespace DesktopPet
         public virtual float ShadowWidth { get { return 80f; } }
         // Characters with a voice speak their lines: a recorded clip when there is one, text-to-speech otherwise.
         public virtual bool HasVoice { get { return false; } }
+        // Anchored characters stay where they're put (VTuber-style) instead of walking around and falling.
+        public virtual bool Anchored { get { return false; } }
         public virtual byte[] VoiceClip(string text) { return null; }
 
         // Distance from the feet to the top of the head (unscaled px * S); the speech bubble sits above it.

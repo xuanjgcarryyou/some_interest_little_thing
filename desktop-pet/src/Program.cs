@@ -55,6 +55,14 @@ namespace DesktopPet
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         public struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct BITMAPINFOHEADER
+        {
+            public int biSize, biWidth, biHeight;
+            public short biPlanes, biBitCount;
+            public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
+        }
+
         public const int WS_EX_LAYERED = 0x00080000, WS_EX_TOOLWINDOW = 0x00000080,
                          WS_EX_TOPMOST = 0x00000008, WS_EX_NOACTIVATE = 0x08000000;
         public const int ULW_ALPHA = 2;
@@ -70,5 +78,8 @@ namespace DesktopPet
         [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hdc);
         [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
         [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
+        [DllImport("gdi32.dll")] public static extern bool GdiFlush();
+        [DllImport("gdi32.dll")]
+        public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
     }
 }

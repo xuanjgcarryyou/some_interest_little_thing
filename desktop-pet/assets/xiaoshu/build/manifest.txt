@@ -5,4 +5,7 @@ patch mouth_a mouth_a.png 188.01 169.12
 patch mouth_o mouth_o.png 190.58 169.12
 patch happy_eyes happy_eyes.png 141.65 127.91
 patch happy_mouth happy_mouth.png 182.86 163.97
+patch surprised_eyes surprised_eyes.png 146.8 122.76
+patch surprised_mouth surprised_mouth.png 190.58 169.12
 zone mouth 188.01 169.12 16.31 13.74
+zone eyes 141.65 127.91 106.45 29.19

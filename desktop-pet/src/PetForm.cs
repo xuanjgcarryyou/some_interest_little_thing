@@ -6,6 +6,7 @@ using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace DesktopPet
@@ -19,7 +20,8 @@ namespace DesktopPet
 
         readonly float S;                 // DPI scale
         readonly int W, H, FootMargin;    // window size; pet's feet sit FootMargin above the window bottom
-        readonly Bitmap canvas;
+        readonly Bitmap canvas;          // drawn straight into the DIB that UpdateLayeredWindow reads
+        readonly IntPtr canvasDc, canvasDib, canvasOldObj;
         readonly FontFamily fontFamily;
         readonly Font bubbleFont;
         readonly Random rnd = new Random();
@@ -32,8 +34,15 @@ namespace DesktopPet
         readonly NotifyIcon tray;
         readonly string statePath;
         readonly List<ToolStripMenuItem> characterItems = new List<ToolStripMenuItem>();
-        ToolStripMenuItem hungerItem, feedItem, sleepItem, followItem, transformItem, muteItem;
+        ToolStripMenuItem hungerItem, feedItem, sleepItem, followItem, transformItem, muteItem, homeItem;
         Character character;
+
+        // Where an anchored character lives (feet position); NaN until placed.
+        float anchorX = float.NaN, anchorY = float.NaN;
+        // Gaze: follows the cursor while it's moving nearby, otherwise wanders.
+        float gazeX, gazeY, idleGazeX, idleGazeY;
+        int gazeTimer, cursorStill;
+        Point lastCursor;
 
         // World position = screen coords of the pet's foot center.
         float cx, footY, vx, vy, lastCx;
@@ -75,7 +84,21 @@ namespace DesktopPet
             Text = "麻糬";
             Size = new Size(W, H);
 
-            canvas = new Bitmap(W, H, PixelFormat.Format32bppArgb);
+            // A top-down premultiplied DIB that both GDI+ (drawing) and the layered window (display) share,
+            // so no bitmap has to be converted or allocated per frame.
+            Native.BITMAPINFOHEADER bmi = new Native.BITMAPINFOHEADER();
+            bmi.biSize = Marshal.SizeOf(typeof(Native.BITMAPINFOHEADER));
+            bmi.biWidth = W;
+            bmi.biHeight = -H;
+            bmi.biPlanes = 1;
+            bmi.biBitCount = 32;
+            IntPtr screenDc = Native.GetDC(IntPtr.Zero);
+            IntPtr bits;
+            canvasDc = Native.CreateCompatibleDC(screenDc);
+            canvasDib = Native.CreateDIBSection(screenDc, ref bmi, 0, out bits, IntPtr.Zero, 0);
+            canvasOldObj = Native.SelectObject(canvasDc, canvasDib);
+            Native.ReleaseDC(IntPtr.Zero, screenDc);
+            canvas = new Bitmap(W, H, W * 4, PixelFormat.Format32bppPArgb, bits);
             fontFamily = PickFontFamily();
             bubbleFont = new Font(fontFamily, 14f * S, FontStyle.Regular, GraphicsUnit.Pixel);
 
@@ -94,8 +117,9 @@ namespace DesktopPet
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
             cx = wa.Left + wa.Width * 0.75f;
             footY = wa.Top + 120 * S;
-            lastCx = cx;
             SetState(PetState.Fall, 0);
+            if (character.Anchored) SnapToAnchor();
+            lastCx = cx;
 
             timer = new System.Windows.Forms.Timer();
             timer.Interval = 1000 / Fps;
@@ -129,6 +153,10 @@ namespace DesktopPet
             voice.Dispose();
             tray.Visible = false;
             tray.Dispose();
+            canvas.Dispose();
+            Native.SelectObject(canvasDc, canvasOldObj);
+            Native.DeleteObject(canvasDib);
+            Native.DeleteDC(canvasDc);
             base.OnFormClosing(e);
         }
 
@@ -155,7 +183,15 @@ namespace DesktopPet
         {
             mouseDown = false;
             idleFrames = 0;
-            if (dragMoved)
+            if (dragMoved && character.Anchored)
+            {
+                // Stays where it's dropped.
+                anchorX = cx;
+                anchorY = footY;
+                vx = vy = 0;
+                SetState(PetState.Idle, Fps);
+            }
+            else if (dragMoved)
             {
                 vx = Clamp(vx, -30 * S, 30 * S);
                 vy = Clamp(vy, -30 * S, 30 * S);
@@ -179,8 +215,10 @@ namespace DesktopPet
             // Safety net in case the button-up happened somewhere we never heard about.
             if (mouseDown && (Control.MouseButtons & MouseButtons.Left) == 0) ReleaseMouse();
             if (mouseDown) UpdateDrag(ground);
+            UpdateGaze();
 
-            switch (state)
+            if (character.Anchored) UpdateAnchored();
+            else switch (state)
             {
                 case PetState.Idle: UpdateIdle(); break;
                 case PetState.Walk: UpdateWalk(wa, half); break;
@@ -192,7 +230,7 @@ namespace DesktopPet
                 case PetState.Transform: UpdateTransform(); break;
             }
 
-            if (state != PetState.Drag && state != PetState.Fall)
+            if (!character.Anchored && state != PetState.Drag && state != PetState.Fall)
             {
                 if (footY < ground - 1) { vx = vy = 0; SetState(PetState.Fall, 0); } // e.g. the taskbar moved
                 else footY = ground;
@@ -225,6 +263,73 @@ namespace DesktopPet
             vy = vy * 0.5f + (ny - footY) * 0.5f;
             cx = nx;
             footY = ny;
+        }
+
+        // Anchored (VTuber-style) characters never walk or fall; they idle, chat, react and doze off in place.
+        void UpdateAnchored()
+        {
+            switch (state)
+            {
+                case PetState.Idle:
+                    if (--stateTimer > 0) break;
+                    if (idleFrames > Fps * 120) { GoToSleep(); break; }
+                    if (rnd.Next(100) < 30) Say(hunger < 30 ? Pick(character.Lines.Hungry) : Pick(character.Lines.Talk), Fps * 3);
+                    SetState(PetState.Idle, rnd.Next(Fps * 4, Fps * 9));
+                    break;
+                case PetState.Sleep: UpdateSleep(); break;
+                case PetState.Happy: UpdateHappy(); break;
+                case PetState.Eat: UpdateEat(); break;
+                case PetState.Drag: break;
+                default: SetState(PetState.Idle, Fps); break; // walking/falling don't apply
+            }
+        }
+
+        void UpdateGaze()
+        {
+            Point c = Cursor.Position;
+            if (c == lastCursor) cursorStill++;
+            else { cursorStill = 0; lastCursor = c; }
+
+            float faceY = footY - character.HeadHeight(S) * 0.8f;
+            float dx = c.X - cx, dy = c.Y - faceY;
+            float tx, ty;
+            if (cursorStill < Fps * 4 && dx * dx + dy * dy < 900 * 900 * S * S)
+            {
+                tx = Clamp(dx / (350 * S), -1, 1);
+                ty = Clamp(dy / (300 * S), -1, 1);
+            }
+            else
+            {
+                if (--gazeTimer <= 0)
+                {
+                    gazeTimer = rnd.Next(Fps * 2, Fps * 5);
+                    idleGazeX = rnd.Next(3) == 0 ? 0f : (float)(rnd.NextDouble() * 1.4 - 0.7);
+                    idleGazeY = (float)(rnd.NextDouble() * 0.6 - 0.3);
+                }
+                tx = idleGazeX;
+                ty = idleGazeY;
+            }
+            gazeX += (tx - gazeX) * 0.1f;
+            gazeY += (ty - gazeY) * 0.1f;
+        }
+
+        // Puts an anchored character at its saved spot, or the bottom-right corner above the taskbar.
+        void SnapToAnchor()
+        {
+            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            bool onScreen = false;
+            if (!float.IsNaN(anchorX))
+                foreach (Screen s in Screen.AllScreens)
+                    if (s.Bounds.Contains((int)anchorX, (int)anchorY - 10)) onScreen = true;
+            if (!onScreen)
+            {
+                anchorX = wa.Right - character.BodyWidth(S) / 2 - 10 * S;
+                anchorY = wa.Bottom;
+            }
+            cx = anchorX;
+            footY = anchorY;
+            vx = vy = 0;
+            SetState(PetState.Idle, Fps);
         }
 
         void UpdateDragged()
@@ -403,6 +508,13 @@ namespace DesktopPet
 
         void BringHome()
         {
+            if (character.Anchored)
+            {
+                anchorX = float.NaN;
+                SnapToAnchor();
+                Say("我回來了！", Fps * 2);
+                return;
+            }
             Rectangle wa = Screen.PrimaryScreen.WorkingArea;
             cx = wa.Left + wa.Width / 2f;
             footY = wa.Top + 100 * S;
@@ -419,7 +531,8 @@ namespace DesktopPet
             recentClicks.Clear();
             for (int i = 0; i < 8; i++) Spawn(ParticleKind.Dust, (i < 4 ? -1 : 1) * (20 + i * 4) * S, -(10 + i * 6) * S);
             squash = 1.3f;
-            if (state != PetState.Drag && state != PetState.Fall) SetState(PetState.Idle, Fps * 2);
+            if (character.Anchored) SnapToAnchor();
+            else if (state != PetState.Drag && state != PetState.Fall) SetState(PetState.Idle, Fps * 2);
             Say(character.Lines.Greeting, Fps * 3);
             UpdateTrayIcon();
         }
@@ -471,7 +584,8 @@ namespace DesktopPet
                 if (voice.Muted) voice.Stop();
             });
             m.Items.Add(muteItem);
-            m.Items.Add("叫回螢幕中間", null, delegate { BringHome(); });
+            homeItem = new ToolStripMenuItem("叫回螢幕中間", null, delegate { BringHome(); });
+            m.Items.Add(homeItem);
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("掰掰（結束）", null, delegate { Close(); });
 
@@ -483,6 +597,8 @@ namespace DesktopPet
                 transformItem.Text = character.Lines.TransformMenu ?? "變身！";
                 transformItem.Enabled = state != PetState.Drag && state != PetState.Fall && state != PetState.Transform;
                 followItem.Checked = followMouse;
+                followItem.Visible = !character.Anchored;
+                homeItem.Text = character.Anchored ? "回到右下角" : "叫回螢幕中間";
                 muteItem.Visible = character.HasVoice;
                 muteItem.Checked = voice.Muted;
                 sleepItem.Text = state == PetState.Sleep ? "叫醒" + character.Name : "去睡覺";
@@ -546,13 +662,14 @@ namespace DesktopPet
                 g.TextRenderingHint = TextRenderingHint.AntiAlias;
 
                 float ox = W / 2f, oy = H - FootMargin;
-                float hop = state == PetState.Happy ? -(float)Math.Abs(Math.Sin(stateTimer * 0.21)) * 14 * S : 0f;
+                bool anchored = character.Anchored;
+                float hop = state == PetState.Happy ? -(float)Math.Abs(Math.Sin(stateTimer * 0.21)) * (anchored ? 5 : 14) * S : 0f;
                 float headH = character.HeadHeight(S);
-                if (footY >= ground - 1) DrawShadow(g, ox, oy, hop, character.ShadowWidth * S);
+                if (!anchored && footY >= ground - 1) DrawShadow(g, ox, oy, hop, character.ShadowWidth * S);
 
                 FillView(ox, oy + hop);
                 GraphicsState saved = g.Save();
-                if (state == PetState.Drag)
+                if (state == PetState.Drag && !anchored)
                 {
                     // Dangle from where it's being held, near the top of the head.
                     float px = ox, py = oy - headH * 0.8f;
@@ -583,6 +700,8 @@ namespace DesktopPet
             view.StateTimer = stateTimer;
             view.Squash = squash;
             view.Blink = blinkTimer < 4;
+            view.BlinkPhase = blinkTimer == 1 || blinkTimer == 2 ? 1 : 0; // half, closed, closed, half
+            view.Gaze = new PointF(gazeX, gazeY);
             view.Hungry = hunger < 30;
             view.Look = LookOffset();
             view.VX = cx - lastCx;
@@ -592,27 +711,16 @@ namespace DesktopPet
 
         void UpdateLayered(int x, int y)
         {
+            Native.GdiFlush();
             IntPtr screenDc = Native.GetDC(IntPtr.Zero);
-            IntPtr memDc = Native.CreateCompatibleDC(screenDc);
-            IntPtr hBmp = canvas.GetHbitmap(Color.FromArgb(0));
-            IntPtr oldBmp = Native.SelectObject(memDc, hBmp);
-            try
-            {
-                Native.POINT dst = new Native.POINT(x, y), src = new Native.POINT(0, 0);
-                Native.SIZE size = new Native.SIZE(W, H);
-                Native.BLENDFUNCTION blend = new Native.BLENDFUNCTION();
-                blend.BlendOp = Native.AC_SRC_OVER;
-                blend.SourceConstantAlpha = 255;
-                blend.AlphaFormat = Native.AC_SRC_ALPHA;
-                Native.UpdateLayeredWindow(Handle, screenDc, ref dst, ref size, memDc, ref src, 0, ref blend, Native.ULW_ALPHA);
-            }
-            finally
-            {
-                Native.SelectObject(memDc, oldBmp);
-                Native.DeleteObject(hBmp);
-                Native.DeleteDC(memDc);
-                Native.ReleaseDC(IntPtr.Zero, screenDc);
-            }
+            Native.POINT dst = new Native.POINT(x, y), src = new Native.POINT(0, 0);
+            Native.SIZE size = new Native.SIZE(W, H);
+            Native.BLENDFUNCTION blend = new Native.BLENDFUNCTION();
+            blend.BlendOp = Native.AC_SRC_OVER;
+            blend.SourceConstantAlpha = 255;
+            blend.AlphaFormat = Native.AC_SRC_ALPHA;
+            Native.UpdateLayeredWindow(Handle, screenDc, ref dst, ref size, canvasDc, ref src, 0, ref blend, Native.ULW_ALPHA);
+            Native.ReleaseDC(IntPtr.Zero, screenDc);
         }
 
         void DrawShadow(Graphics g, float x, float y, float hop, float width)
@@ -760,7 +868,7 @@ namespace DesktopPet
             return SystemFonts.DefaultFont.FontFamily;
         }
 
-        // State file: hunger;savedAtUtcTicks;characterId;form;muted. Hunger drains slowly while closed.
+        // State file: hunger;savedAtUtcTicks;characterId;form;muted;anchorX;anchorY. Hunger drains slowly while closed.
         void LoadState()
         {
             try
@@ -778,6 +886,11 @@ namespace DesktopPet
                     character.Form = int.Parse(parts[3], CultureInfo.InvariantCulture);
                 }
                 if (parts.Length >= 5) voice.Muted = parts[4] == "1";
+                if (parts.Length >= 7)
+                {
+                    anchorX = float.Parse(parts[5], CultureInfo.InvariantCulture);
+                    anchorY = float.Parse(parts[6], CultureInfo.InvariantCulture);
+                }
             }
             catch { }
         }
@@ -786,8 +899,8 @@ namespace DesktopPet
         {
             try
             {
-                File.WriteAllText(statePath, string.Format(CultureInfo.InvariantCulture, "{0};{1};{2};{3};{4}",
-                    hunger, DateTime.UtcNow.Ticks, character.Id, character.Form, voice.Muted ? 1 : 0));
+                File.WriteAllText(statePath, string.Format(CultureInfo.InvariantCulture, "{0};{1};{2};{3};{4};{5};{6}",
+                    hunger, DateTime.UtcNow.Ticks, character.Id, character.Form, voice.Muted ? 1 : 0, anchorX, anchorY));
             }
             catch { }
         }

@@ -1,6 +1,7 @@
 # 角色素材（小糬）
 
-小糬是用 AI 生成的圖片和語音做成的「簡化版 Live2D」角色。
+小糬是用 AI 生成的圖片和語音做成的 VTuber 風格角色：固定站在螢幕一角（可拖曳移動），
+靠「簡化版 Live2D」變形動起來——頭以脖子為軸輕輕擺動、臉轉向滑鼠、呼吸、兩側頭髮飄動、眨眼、表情與口型。
 你只要提供一張原圖、幾張只改表情的變體、以及語音檔，其餘（去背、對齊、切出表情補丁、轉檔）都由工具自動處理。
 
 ## 流程
@@ -16,24 +17,36 @@
 
 **三個硬性規定：**
 
-- **左右對稱**的正面站姿（不要只有單邊的配件）
-- **純綠色背景 `#00FF00`**，角色身上不能有綠色（若工具能直接輸出透明背景 PNG 更好）
+- **正面站姿、頭擺正、看向前方**；手最好不要靠近臉和脖子（頭部以脖子為軸擺動，附近的手會被一起帶動）
+- **純綠色背景**，角色身上不能有綠色（若工具能直接輸出透明背景 PNG 更好）
 - 表情變體一律**上傳原圖、用「編輯」產生**，不要重新生成新圖
 
 ### 原圖 `base.png`
 
+風格：一般比例（非 Q 版）的全身立繪。最穩的做法是拿已經喜歡的那張圖去「編輯」成中性表情，
+這樣風格和姿勢都不會跑掉；那張原本的開心表情圖就可以直接當 `face_happy.png`。
+
+從零生成時：
+
 ```
-Full-body chibi anime girl character for a desktop mascot / VTuber-style avatar,
-2.5-head-tall chibi proportions. Standing, facing the viewer directly, perfectly
-symmetrical front pose, arms relaxed at her sides, feet together.
-Long fluffy twin tails in pastel pink fading to white, white cat-ear headphones
-with soft pink glowing accents, large sparkling violet eyes, gentle closed-mouth smile.
-Oversized white hoodie with pink trim and a small round white mochi-cat face printed
-on the chest, pastel lavender pleated skirt, white socks, pink sneakers.
-Clean crisp lineart, soft cel shading, high-quality VTuber model illustration,
-flat even lighting. Entire character visible and centered with generous margin.
-Plain solid pure green (#00FF00) background, no shadow, no ground, no text,
-no watermark, no green anywhere on the character. Portrait canvas 1024x1536.
+Full-body anime girl standing, normal slender anime proportions (NOT chibi),
+high-quality VTuber model illustration. Facing the viewer directly, head straight,
+looking at the viewer, gentle closed-mouth smile, both hands tucked into the hoodie pocket.
+Long straight pink twin tails reaching her thighs, white headphones with cat ears,
+large violet eyes, oversized long white hoodie worn as a dress, bare legs,
+white high-top sneakers with pink laces.
+Clean crisp lineart, soft cel shading, flat even lighting. Entire body visible and centered,
+small margin around her. Plain solid green background, no shadow, no ground,
+no text, no watermark, no green anywhere on the character. Portrait canvas 1024x1536.
+```
+
+從現有的圖改成中性表情（上傳那張圖）：
+
+```
+Edit this exact image. Keep EVERYTHING identical — same pose, same position,
+same canvas size, same colors, same lineart, same background. Do not move, crop,
+zoom, or redraw anything except the face: eyes open looking at the viewer,
+gentle closed-mouth smile.
 ```
 
 ### 表情變體
@@ -49,6 +62,7 @@ zoom, or redraw anything except:
 | 檔名 | 接在開頭後面 | 用途 |
 |---|---|---|
 | `eyes_closed.png` | `both eyes gently closed, relaxed curved eyelids with lashes.` | 眨眼、睡覺 |
+| `eyes_half.png` | `both eyes half-closed, mid-blink.` | 讓眨眼更順（可省略） |
 | `mouth_small.png` | `the mouth slightly open as if mid-sentence, a small gap.` | 說話（小聲） |
 | `mouth_a.png` | `the mouth open wide as if saying "ah", a little tongue visible.` | 說話（大聲） |
 | `mouth_o.png` | `a small round "oh" mouth.` | 說話（變化） |

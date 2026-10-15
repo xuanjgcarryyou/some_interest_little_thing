@@ -6,18 +6,17 @@ using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 
 namespace DesktopPet
 {
-    // A "Live2D-lite" character built from AI-generated art: one base image plus expression
-    // patches cut out by tools/AssetBuilder, embedded in the exe under "<id>/...".
-    // Each frame the composed image is drawn as thin horizontal strips with per-strip offsets,
-    // which gives a soft, spring-driven sway without needing a rigged model.
+    // A VTuber-style character built from AI-generated art: one base image plus expression patches
+    // cut out by tools/AssetBuilder, embedded in the exe under "<id>/...".
+    // Each frame the expression is composed onto the base and then warped pixel by pixel, Live2D-style:
+    // the head rolls around the neck, the face shifts toward where it's looking, the chest breathes
+    // and the hair at the sides sways. Every motion is a small spring-driven parameter.
     class SpriteCharacter : Character
     {
-        const float TargetHeight = 220f; // on-screen height, unscaled px
-        const int Strip = 3;
-
         class Patch
         {
             public Bitmap Image, Scaled;
@@ -29,41 +28,61 @@ namespace DesktopPet
         readonly Dictionary<string, string> clipByText;
         readonly Bitmap source;
         readonly Dictionary<string, Patch> patches = new Dictionary<string, Patch>();
-        readonly RectangleF mouthZone; // in source px; empty if unknown
+        readonly RectangleF eyesZone, mouthZone; // in source px; empty if unknown
+        readonly float targetHeight;             // on-screen height, unscaled px
+        readonly bool anchored;
 
+        // Per-DPI caches.
         float scaledFor = -1f, k;
-        Bitmap scaledBase, frame;
-        float lean, leanVel;
+        int margin;
+        Bitmap scaledBase, frame, output;
+        int[] srcPx, dstPx;
+        int[] rowMin, rowMax;  // opaque span of each row of the composed frame
+        string composedKey;    // which expression srcPx currently holds
+        float faceX, faceY, faceR, neckY, neckBand; // rig geometry in frame px
 
-        SpriteCharacter(string id, string name, PetLines script, Dictionary<string, string> clipByText, Bitmap source, RectangleF mouthZone)
+        // Rig parameters (spring-driven): head roll in degrees, gaze yaw/pitch in -1..1.
+        float roll, rollVel, yaw, yawVel, pitch, pitchVel;
+
+        SpriteCharacter(string id, string name, PetLines script, Dictionary<string, string> clipByText, Bitmap source,
+            RectangleF eyesZone, RectangleF mouthZone, float targetHeight, bool anchored)
         {
             this.id = id;
             this.name = name;
             this.script = script;
             this.clipByText = clipByText;
             this.source = source;
+            this.eyesZone = eyesZone;
             this.mouthZone = mouthZone;
+            this.targetHeight = targetHeight;
+            this.anchored = anchored;
         }
 
         // Returns null when the exe was built without this character's assets.
-        public static SpriteCharacter TryLoad(string id, string name, PetLines script, Dictionary<string, string> clipByText)
+        public static SpriteCharacter TryLoad(string id, string name, PetLines script, Dictionary<string, string> clipByText,
+            float targetHeight, bool anchored)
         {
             string manifest = ReadText(id + "/manifest.txt");
             if (manifest == null) return null;
 
             Bitmap baseImage = null;
-            RectangleF zone = RectangleF.Empty;
+            RectangleF eyes = RectangleF.Empty, mouth = RectangleF.Empty;
             List<string[]> patchLines = new List<string[]>();
             foreach (string line in manifest.Split('\n'))
             {
                 string[] f = line.Trim().Split(' ');
                 if (f[0] == "base") baseImage = ReadImage(id + "/" + f[1]);
                 else if (f[0] == "patch") patchLines.Add(f);
-                else if (f[0] == "zone" && f[1] == "mouth") zone = new RectangleF(F(f[2]), F(f[3]), F(f[4]), F(f[5]));
+                else if (f[0] == "zone")
+                {
+                    RectangleF r = new RectangleF(F(f[2]), F(f[3]), F(f[4]), F(f[5]));
+                    if (f[1] == "mouth") mouth = r;
+                    else if (f[1] == "eyes") eyes = r;
+                }
             }
             if (baseImage == null) return null;
 
-            SpriteCharacter c = new SpriteCharacter(id, name, script, clipByText, baseImage, zone);
+            SpriteCharacter c = new SpriteCharacter(id, name, script, clipByText, baseImage, eyes, mouth, targetHeight, anchored);
             foreach (string[] f in patchLines)
             {
                 Bitmap img = ReadImage(id + "/" + f[2]);
@@ -81,9 +100,10 @@ namespace DesktopPet
         public override string Name { get { return name; } }
         public override PetLines Lines { get { return script; } }
         public override bool HasVoice { get { return true; } }
-        public override float HeadHeight(float S) { return (TargetHeight + 4) * S; }
-        public override float BodyWidth(float S) { return TargetHeight * S * source.Width / source.Height * 1.4f + 30 * S; } // squash + sway
-        public override float ShadowWidth { get { return TargetHeight * source.Width / source.Height * 0.55f; } }
+        public override bool Anchored { get { return anchored; } }
+        public override float HeadHeight(float S) { return (targetHeight + 4) * S; }
+        public override float BodyWidth(float S) { return targetHeight * S * source.Width / source.Height + 60 * S; }
+        public override float ShadowWidth { get { return targetHeight * source.Width / source.Height * 0.55f; } }
 
         public override byte[] VoiceClip(string text)
         {
@@ -96,48 +116,26 @@ namespace DesktopPet
         {
             float S = v.S;
             EnsureScaled(S);
+            string before = composedKey;
             ComposeFrame(v);
+            UpdateRig(v);
+            // Idle motion is slow, so re-warping every other frame is enough; anything lively gets every frame.
+            bool lively = v.State == PetState.Drag || v.State == PetState.Happy || v.Speaking || composedKey != before;
+            if (lively || (v.Tick & 1) == 0) Warp(v);
 
-            // Breathing and impact squash; a little bob while walking.
-            float sq = v.Squash * (1f + 0.012f * (float)Math.Sin(v.Tick * (v.State == PetState.Sleep ? 0.05 : 0.08)));
-            if (v.State == PetState.Drag) sq = 0.94f;
-            float bob = v.State == PetState.Walk ? -(float)Math.Abs(Math.Sin(v.Tick * 0.3)) * 3 * S : 0f;
-
-            // The upper body lags behind horizontal motion like it's on a spring, plus a gentle idle sway.
-            float target = Math.Max(-14 * S, Math.Min(14 * S, -v.VX * 1.5f));
-            target += (float)Math.Sin(v.Tick * 0.05) * 2.5f * S;
-            if (v.State == PetState.Walk) target += Facing(v) * 3 * S;
-            leanVel = (leanVel + (target - lean) * 0.12f) * 0.82f;
-            lean += leanVel;
-
-            float sx = sq, sy = 1f / sq;
-            float dw = frame.Width * sx, dh = frame.Height * sy;
-            float left = v.X - dw / 2, top = v.Y - dh + bob;
-
-            InterpolationMode oldMode = g.InterpolationMode;
-            g.InterpolationMode = InterpolationMode.Bilinear;
-            using (ImageAttributes ia = new ImageAttributes())
-            {
-                ia.SetWrapMode(WrapMode.TileFlipXY);
-                for (int y0 = 0; y0 < frame.Height; y0 += Strip)
-                {
-                    int h = Math.Min(Strip, frame.Height - y0);
-                    float t = (float)y0 / frame.Height; // 0 = top of head, 1 = feet
-                    float dx = lean * (1 - t) * (1 - t);
-                    float dy = top + y0 * sy;
-                    PointF[] dest = { new PointF(left + dx, dy), new PointF(left + dx + dw, dy), new PointF(left + dx, dy + h * sy + 0.75f) };
-                    g.DrawImage(frame, dest, new RectangleF(0, y0, frame.Width, h), GraphicsUnit.Pixel, ia);
-                }
-            }
-            g.InterpolationMode = oldMode;
+            // Feet (the bottom edge of the art) sit at (v.X, v.Y).
+            int left = (int)Math.Round(v.X - output.Width / 2f), top = (int)Math.Round(v.Y - output.Height);
+            g.DrawImage(output, new Rectangle(left, top, output.Width, output.Height));
 
             if (v.State == PetState.Eat && !mouthZone.IsEmpty)
             {
-                float mx = left + (mouthZone.X + mouthZone.Width / 2) * k * sx + lean * 0.5f;
-                float my = top + (mouthZone.Y + mouthZone.Height / 2) * k * sy;
-                Ink.Daifuku(g, mx + Facing(v) * 22 * S, my + 6 * S, Bites(v), S);
+                float mx = left + margin + (mouthZone.X + mouthZone.Width) * k + 10 * S;
+                float my = top + margin + (mouthZone.Y + mouthZone.Height / 2) * k;
+                Ink.Daifuku(g, mx, my, Bites(v), S);
             }
         }
+
+        // ---------- expression ----------
 
         void ComposeFrame(PetView v)
         {
@@ -148,16 +146,36 @@ namespace DesktopPet
                 case PetState.Happy: eyes = "happy_eyes"; mouth = "happy_mouth"; break;
                 case PetState.Drag: eyes = "surprised_eyes"; mouth = "surprised_mouth"; break;
                 case PetState.Eat: eyes = "happy_eyes"; mouth = (v.StateTimer / 6) % 2 == 0 ? "mouth_a" : null; break;
-                default: if (v.Blink) eyes = "eyes_closed"; break;
+                default:
+                    if (v.Blink) eyes = v.BlinkPhase == 1 ? "eyes_closed" : "eyes_half";
+                    break;
             }
             if (v.Speaking && v.State != PetState.Eat) mouth = MouthPatch(v.Mouth);
+
+            // Recomposing is the expensive part, and the expression only changes every few frames.
+            string key = eyes + "|" + mouth;
+            if (key == composedKey) return;
+            composedKey = key;
 
             using (Graphics fg = Graphics.FromImage(frame))
             {
                 fg.Clear(Color.Transparent);
-                fg.DrawImage(scaledBase, new Rectangle(0, 0, scaledBase.Width, scaledBase.Height));
-                DrawPatch(fg, eyes, eyes == "happy_eyes" || eyes == "surprised_eyes" ? "eyes_closed" : null);
+                fg.DrawImage(scaledBase, new Rectangle(margin, margin, scaledBase.Width, scaledBase.Height));
+                DrawPatch(fg, eyes, eyes == "eyes_closed" ? null : "eyes_closed");
                 DrawPatch(fg, mouth, mouth == "happy_mouth" ? "mouth_a" : mouth == "surprised_mouth" ? "mouth_o" : null);
+            }
+
+            int w = frame.Width, h = frame.Height;
+            BitmapData sd = frame.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+            Marshal.Copy(sd.Scan0, srcPx, 0, srcPx.Length);
+            frame.UnlockBits(sd);
+            for (int y = 0; y < h; y++)
+            {
+                int x0 = w, x1 = -1;
+                for (int x = 0; x < w; x++)
+                    if (srcPx[y * w + x] != 0) { if (x < x0) x0 = x; x1 = x; }
+                rowMin[y] = x0;
+                rowMax[y] = x1;
             }
         }
 
@@ -177,18 +195,158 @@ namespace DesktopPet
             if (name == null) return;
             Patch p;
             if (!patches.TryGetValue(name, out p) && (fallback == null || !patches.TryGetValue(fallback, out p))) return;
-            fg.DrawImage(p.Scaled, new Rectangle((int)Math.Round(p.X * k), (int)Math.Round(p.Y * k), p.Scaled.Width, p.Scaled.Height));
+            fg.DrawImage(p.Scaled, new Rectangle(margin + (int)Math.Round(p.X * k), margin + (int)Math.Round(p.Y * k), p.Scaled.Width, p.Scaled.Height));
         }
 
-        // Pre-scale everything once for the current DPI so per-frame drawing stays cheap.
+        // ---------- rig ----------
+
+        void UpdateRig(PetView v)
+        {
+            float t = v.Tick;
+            float yawT = v.Gaze.X, pitchT = v.Gaze.Y;
+            float rollT = (float)(Math.Sin(t * 0.021) * 1.6 + Math.Sin(t * 0.047 + 1.3) * 0.8); // idle wander
+            switch (v.State)
+            {
+                case PetState.Sleep: yawT = 0; pitchT = 0.7f; rollT = 7f + (float)Math.Sin(t * 0.02); break; // head droops
+                case PetState.Happy: rollT = (float)Math.Sin(v.StateTimer * 0.35) * 5f; pitchT = -0.25f; break;
+                case PetState.Drag: rollT = Math.Max(-10f, Math.Min(10f, -v.VX * 0.6f)); pitchT = 0.2f; break;
+            }
+            if (v.Speaking && v.Mouth != Mouth.Closed) pitchT += 0.12f; // little nods while talking
+
+            Spring(ref roll, ref rollVel, rollT, 0.05f, 0.85f);
+            Spring(ref yaw, ref yawVel, yawT, 0.06f, 0.82f);
+            Spring(ref pitch, ref pitchVel, pitchT, 0.06f, 0.82f);
+        }
+
+        static void Spring(ref float value, ref float velocity, float target, float stiffness, float damping)
+        {
+            velocity = (velocity + (target - value) * stiffness) * damping;
+            value += velocity;
+        }
+
+        // Inverse-maps every output pixel to where it comes from in the composed frame.
+        void Warp(PetView v)
+        {
+            int w = frame.Width, h = frame.Height;
+            float S = v.S, t = v.Tick;
+            int reach = margin + 2; // no displacement is bigger than the margin, so pixels farther out stay empty
+            Array.Clear(dstPx, 0, dstPx.Length);
+
+            float a = roll * (float)Math.PI / 180f;
+            float yawPx = yaw * 7 * S, pitchPx = pitch * 5 * S;
+            float breath = (float)Math.Sin(t * 0.07) * 1.6f * S;
+            float sway = (float)Math.Sin(t * 0.013) * 1.2f * S;
+            float[] hairWave = new float[h];
+            for (int y = 0; y < h; y++) hairWave[y] = (float)Math.Sin(t * 0.09 + y * 0.04) * 1.3f * S;
+
+            for (int y = 0; y < h; y++)
+            {
+                // Only the columns the character can reach on this row (looking a few rows up and down).
+                int x0 = w, x1 = -1;
+                for (int yy = Math.Max(0, y - reach); yy <= Math.Min(h - 1, y + reach); yy++)
+                {
+                    if (rowMin[yy] < x0) x0 = rowMin[yy];
+                    if (rowMax[yy] > x1) x1 = rowMax[yy];
+                }
+                if (x1 < 0) continue;
+                x0 = Math.Max(0, x0 - reach);
+                x1 = Math.Min(w - 1, x1 + reach);
+
+                float up = (float)(h - y) / h; // 0 at the bottom edge, 1 at the top
+                float wHead = SmoothStep((neckY + neckBand - y) / (2 * neckBand));
+                int row = y * w;
+                for (int x = x0; x <= x1; x++)
+                {
+                    float dx = sway * up, dy = -breath * up;
+                    if (wHead > 0)
+                    {
+                        // Roll around the neck (small-angle rotation), weighted so the shoulders stay put.
+                        float rx = x - faceX, ry = y - neckY, aw = a * wHead;
+                        dx += -ry * aw;
+                        dy += rx * aw;
+                        // Face parallax: the middle of the face shifts toward the gaze, the outline barely moves.
+                        float fx = (x - faceX) / faceR, fy = (y - faceY) / faceR, dd = fx * fx + fy * fy;
+                        if (dd < 1)
+                        {
+                            float wf = (1 - dd) * (1 - dd) * wHead;
+                            dx += yawPx * wf;
+                            dy += pitchPx * wf;
+                        }
+                    }
+                    float side = Math.Abs(x - faceX) - faceR * 1.05f;
+                    if (side > 0) dx += hairWave[y] * Math.Min(1f, side / (faceR * 0.6f));
+
+                    dstPx[row + x] = Sample(x - dx, y - dy, w, h);
+                }
+            }
+
+            BitmapData od = output.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+            Marshal.Copy(dstPx, 0, od.Scan0, dstPx.Length);
+            output.UnlockBits(od);
+        }
+
+        // Bilinear sample of premultiplied ARGB. Below the frame we clamp, so the cut-off body stays solid.
+        int Sample(float sx, float sy, int w, int h)
+        {
+            if (sy > h - 1.001f) sy = h - 1.001f;
+            int x0 = (int)Math.Floor(sx), y0 = (int)Math.Floor(sy);
+            if (x0 < 0 || y0 < 0 || x0 + 1 >= w) return 0;
+            int fx = (int)((sx - x0) * 256), fy = (int)((sy - y0) * 256);
+            int i = y0 * w + x0;
+            int c00 = srcPx[i], c10 = srcPx[i + 1], c01 = srcPx[i + w], c11 = srcPx[i + w + 1];
+            if ((c00 | c10 | c01 | c11) == 0) return 0;
+            int w00 = (256 - fx) * (256 - fy), w10 = fx * (256 - fy), w01 = (256 - fx) * fy, w11 = fx * fy;
+            int ca = (((c00 >> 24) & 255) * w00 + ((c10 >> 24) & 255) * w10 + ((c01 >> 24) & 255) * w01 + ((c11 >> 24) & 255) * w11) >> 16;
+            int cr = (((c00 >> 16) & 255) * w00 + ((c10 >> 16) & 255) * w10 + ((c01 >> 16) & 255) * w01 + ((c11 >> 16) & 255) * w11) >> 16;
+            int cg = (((c00 >> 8) & 255) * w00 + ((c10 >> 8) & 255) * w10 + ((c01 >> 8) & 255) * w01 + ((c11 >> 8) & 255) * w11) >> 16;
+            int cb = ((c00 & 255) * w00 + (c10 & 255) * w10 + (c01 & 255) * w01 + (c11 & 255) * w11) >> 16;
+            return (ca << 24) | (cr << 16) | (cg << 8) | cb;
+        }
+
+        static float SmoothStep(float x)
+        {
+            if (x <= 0) return 0;
+            if (x >= 1) return 1;
+            return x * x * (3 - 2 * x);
+        }
+
+        // Pre-scale everything once for the current DPI, and place the rig from the eye/mouth zones.
         void EnsureScaled(float S)
         {
             if (scaledFor == S) return;
             scaledFor = S;
-            k = TargetHeight * S / source.Height;
+            k = targetHeight * S / source.Height;
+            margin = (int)(12 * S);
             scaledBase = Resize(source, k);
             foreach (Patch p in patches.Values) p.Scaled = Resize(p.Image, k);
-            frame = new Bitmap(scaledBase.Width, scaledBase.Height, PixelFormat.Format32bppPArgb);
+            // Margin on the top and sides gives the warp room to move; the bottom edge is the cut-off body.
+            int w = scaledBase.Width + margin * 2, h = scaledBase.Height + margin;
+            frame = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            output = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            srcPx = new int[w * h];
+            dstPx = new int[w * h];
+            rowMin = new int[h];
+            rowMax = new int[h];
+            composedKey = null;
+
+            if (!eyesZone.IsEmpty && !mouthZone.IsEmpty)
+            {
+                float ex = eyesZone.X + eyesZone.Width / 2, ey = eyesZone.Y + eyesZone.Height / 2;
+                float mx = mouthZone.X + mouthZone.Width / 2, my = mouthZone.Y + mouthZone.Height / 2;
+                float span = my - ey; // eyes-to-mouth distance sets the scale of the face
+                faceX = margin + (ex + mx) / 2 * k;
+                faceY = margin + (ey + span * 0.4f) * k;
+                faceR = Math.Max(eyesZone.Width * 0.7f, span * 2.2f) * k;
+                neckY = margin + (mouthZone.Bottom + span * 1.1f) * k;
+            }
+            else
+            {
+                faceX = w / 2f;
+                faceY = margin + scaledBase.Height * 0.25f;
+                faceR = scaledBase.Width * 0.2f;
+                neckY = margin + scaledBase.Height * 0.38f;
+            }
+            neckBand = faceR * 0.35f;
         }
 
         static Bitmap Resize(Bitmap src, float scale)

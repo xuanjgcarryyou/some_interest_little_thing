@@ -68,7 +68,7 @@ namespace DesktopPet.Tools
         const int Block = 6;           // diff grid cell size, px
         const int PixelThreshold = 60; // summed RGB difference that counts as "changed"
 
-        static readonly string[] Variants = { "eyes_closed", "mouth_small", "mouth_a", "mouth_o", "face_happy", "face_surprised" };
+        static readonly string[] Variants = { "eyes_closed", "eyes_half", "mouth_small", "mouth_a", "mouth_o", "face_happy", "face_surprised" };
 
         class Part
         {
@@ -135,6 +135,7 @@ namespace DesktopPet.Tools
 
             List<Part> parts = new List<Part>();
             AddPart(parts, "eyes_closed", aligned, comps, "eyes_closed", null, Rectangle.Empty);
+            AddPart(parts, "eyes_half", aligned, comps, "eyes_half", null, Rectangle.Empty);
             foreach (string name in new[] { "mouth_small", "mouth_a", "mouth_o" })
                 AddPart(parts, name, aligned, comps, name, null, Rectangle.Empty);
             Rectangle zone = Inflate(mouthZone, mouthZone.Width / 4, mouthZone.Height / 4);
@@ -143,7 +144,12 @@ namespace DesktopPet.Tools
             AddPart(parts, "surprised_eyes", aligned, comps, "face_surprised", false, zone);
             AddPart(parts, "surprised_mouth", aligned, comps, "face_surprised", true, zone);
 
-            Write(outDir, baseImg, alpha, body, parts, mouthZone);
+            // The eye zone (with the mouth zone) tells the runtime rig where the face is.
+            Rectangle eyesZone = Rectangle.Empty;
+            foreach (Part p in parts)
+                if (p.Name == "eyes_closed" || (eyesZone.IsEmpty && p.Name == "happy_eyes")) eyesZone = p.Rect;
+
+            Write(outDir, baseImg, alpha, body, parts, mouthZone, eyesZone);
             Console.WriteLine(warnings == 0 ? "OK" : warnings + " warning(s)");
             return 0;
         }
@@ -497,7 +503,7 @@ namespace DesktopPet.Tools
             parts.Add(p);
         }
 
-        static void Write(string outDir, Img baseImg, byte[] alpha, Rectangle body, List<Part> parts, Rectangle mouthZone)
+        static void Write(string outDir, Img baseImg, byte[] alpha, Rectangle body, List<Part> parts, Rectangle mouthZone, Rectangle eyesZone)
         {
             Rectangle crop = Inflate(body, 6, 6);
             crop.Intersect(new Rectangle(0, 0, baseImg.W, baseImg.H));
@@ -516,9 +522,12 @@ namespace DesktopPet.Tools
                     p.Name, (p.Rect.X - crop.X) * f, (p.Rect.Y - crop.Y) * f));
                 Console.WriteLine("  part {0}: {1}x{2} at ({3},{4})", p.Name, p.Rect.Width, p.Rect.Height, p.Rect.X, p.Rect.Y);
             }
-            if (!mouthZone.IsEmpty)
-                manifest.AppendLine(string.Format(CultureInfo.InvariantCulture, "zone mouth {0:0.##} {1:0.##} {2:0.##} {3:0.##}",
-                    (mouthZone.X - crop.X) * f, (mouthZone.Y - crop.Y) * f, mouthZone.Width * f, mouthZone.Height * f));
+            foreach (KeyValuePair<string, Rectangle> z in new Dictionary<string, Rectangle> { { "mouth", mouthZone }, { "eyes", eyesZone } })
+            {
+                if (z.Value.IsEmpty) continue;
+                manifest.AppendLine(string.Format(CultureInfo.InvariantCulture, "zone {0} {1:0.##} {2:0.##} {3:0.##} {4:0.##}",
+                    z.Key, (z.Value.X - crop.X) * f, (z.Value.Y - crop.Y) * f, z.Value.Width * f, z.Value.Height * f));
+            }
             File.WriteAllText(Path.Combine(outDir, "manifest.txt"), manifest.ToString());
 
             WritePreview(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outDir)), "preview.png"), outDir, parts);
