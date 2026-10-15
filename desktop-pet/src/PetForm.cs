@@ -647,7 +647,8 @@ namespace DesktopPet
 
                 float ox = W / 2f, oy = H - FootMargin;
                 bool anchored = character.Anchored;
-                float hop = state == PetState.Happy ? -(float)Math.Abs(Math.Sin(stateTimer * 0.21)) * (anchored ? 5 : 14) * S : 0f;
+                // Pets hop; an anchored character's bottom edge is a cut-off body, so she bounces in place instead (see SpriteCharacter).
+                float hop = state == PetState.Happy && !anchored ? -(float)Math.Abs(Math.Sin(stateTimer * 0.21)) * 14 * S : 0f;
                 float headH = character.HeadHeight(S);
                 if (!anchored && footY >= ground - 1) DrawShadow(g, ox, oy, hop, character.ShadowWidth * S);
 

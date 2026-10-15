@@ -239,6 +239,8 @@ namespace DesktopPet
             float a = roll * (float)Math.PI / 180f;
             float yawPx = yaw * 7 * S, pitchPx = pitch * 5 * S;
             float breath = (float)Math.Sin(t * 0.07) * 1.6f * S;
+            // Happy bounce: the upper body springs up while the bottom edge stays planted.
+            if (v.State == PetState.Happy) breath += (float)Math.Abs(Math.Sin(v.StateTimer * 0.21)) * 7 * S;
             float sway = (float)Math.Sin(t * 0.013) * 1.2f * S;
             float[] hairWave = new float[h];
             for (int y = 0; y < h; y++) hairWave[y] = (float)Math.Sin(t * 0.09 + y * 0.04) * 1.3f * S;
