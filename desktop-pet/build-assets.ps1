@@ -79,8 +79,12 @@ if ($all) {
     $k = 0
     foreach ($line in $lines) {
         $from = [Math]::Max(0.0, $segments[$k][0] - 0.04) # 0.0, not 0: Max(int, double) rounds to an int
-        $to = [Math]::Min($duration, $segments[$k + $line.Pieces - 1][1] + 0.1)
+        # The last syllable fades out well below the silence threshold, so keep going into the pause:
+        # up to 0.35 s, but stop short of the next line.
         $k += $line.Pieces
+        $lastEnd = $segments[$k - 1][1]
+        $limit = if ($k -lt $segments.Count) { $segments[$k][0] - 0.06 } else { $duration }
+        $to = [Math]::Min($limit, $lastEnd + 0.35)
         $cmds += "ffmpeg -loglevel error -y -i '/in/$($all.Name)' -ss $($from.ToString('0.000', $inv)) -to $($to.ToString('0.000', $inv)) -c:a pcm_s16le '/split/$($line.Id).wav'"
         "  {0,-9} {1,5:0.00}s  {2}" -f $line.Id, ($to - $from), $line.Text
     }
