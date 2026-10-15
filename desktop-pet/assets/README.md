@@ -81,8 +81,16 @@ Young, bright, sweet female voice, Taiwanese Mandarin accent, playful and warm,
 slightly fast, VTuber-like energy, clear articulation, no music, no effects.
 ```
 
-**一句一個檔案**，檔名用下表的 id（WAV、MP3、M4A、OGG、FLAC 都可以）。
-沒有語音檔的台詞會改用 Windows 內建的中文女聲（Microsoft Hanhan）念出來。
+目前用的是 [RealDubbing](https://realdubbing.com/zh/) 的「曉顏」。台詞裡的「糬」在 TTS 輸入時寫成同音的「薯」，避免念錯。
+
+兩種交法（WAV、MP3、M4A、OGG、FLAC 都可以）：
+
+- **整批**：把下表全部台詞照順序、一句一行貼進 TTS，一次生成，存成 `all.wav`。
+  `build-assets.ps1` 會依停頓自動切成每一句。TTS 在句中的「！。？」也會停頓，工具會依標點把這些片段併回同一句；
+  若段數對不上會報錯，那幾句改用單獨檔案補上即可。
+- **單句**：一句一個檔案，檔名用下表的 id。單句檔案會覆蓋 `all.wav` 切出來的同名片段，適合重錄某一句。
+
+沒有語音檔的台詞會改用 Windows 內建的中文女聲（Microsoft Hanhan）念出來；電腦沒有中文語音時就只顯示對話泡泡。
 
 | id | 台詞 |
 |---|---|
