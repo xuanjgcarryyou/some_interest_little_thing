@@ -1,0 +1,19 @@
+name: 591-rent-watcher
+
+services:
+  crawler:
+    build: .
+    restart: unless-stopped
+    user: "1000:1000"  # 資料檔歸一般使用者，刪專案時不用 sudo
+    # 搜尋條件（LIST_URL）、Discord 推播等放在 .env，範例見 .env.example
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      INTERVAL_SECONDS: "600"  # 約 10 分鐘一次
+      JITTER_SECONDS: "120"    # 前後隨機 ±120 秒（實際 8–12 分鐘）
+    volumes:
+      # 原始資料（SQLite）放專案資料夾外，Windows 上是 C:\Users\<你>\projects\591-rent-watcher\data
+      - ~/projects/591-rent-watcher/data:/data
+      # 好讀的 JSON，VS Code 直接開（已被 .gitignore 忽略）
+      - ./output:/output
