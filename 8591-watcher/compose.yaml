@@ -1,0 +1,19 @@
+name: 8591-watcher
+
+services:
+  crawler:
+    build: .
+    restart: unless-stopped
+    user: "1000:1000"  # 資料檔歸 WSL 的 shawnwei，刪專案時不用 sudo
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # 想換條件：到 8591 網頁上篩好，把網址整串貼過來
+      LIST_URL: "https://www.8591.com.tw/v3/mall/list/50556?searchGame=50556&searchServer=50557&searchType=2&accountTag=3&post_time_sort=1"
+      INTERVAL_SECONDS: "300"  # 約 5 分鐘一次
+      JITTER_SECONDS: "60"     # 前後隨機 ±60 秒（實際 4–6 分鐘）
+    volumes:
+      - /home/shawnwei/projects/8591-watcher/data:/data
+      # 好讀的 JSON 輸出到專案資料夾，VS Code 直接開（已被 .gitignore 忽略）
+      - ./output:/output
