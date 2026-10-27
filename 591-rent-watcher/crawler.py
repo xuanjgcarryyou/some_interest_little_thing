@@ -262,22 +262,50 @@ def write_json(name, obj):
 EVENT_NAMES = {"new": "新上架", "price": "租金變動", "removed": "下架", "relisted": "重新上架"}
 
 
+def district(address):
+    """「板橋區-金門街379巷」→「板橋區」。"""
+    head = (address or "").split("-", 1)[0].strip()
+    return head if head.endswith(("區", "市", "鎮", "鄉")) else "其他"
+
+
 def export(db):
-    """輸出好讀的 JSON：目前在架清單（新的在上）+ 最近的異動。"""
+    """輸出好讀的 JSON：在架清單（新的在上）、依行政區分類、最近的異動。"""
     rows = db.execute("""SELECT id, price, title, layout, area, floor, address, community, tags,
         contact, refresh_time, views, url, first_seen, last_seen FROM listings
         WHERE removed_at IS NULL ORDER BY first_seen DESC, rank""").fetchall()
+    listings = [{
+        "租金": price, "標題": title, "網址": url, "區": district(address), "格局": layout,
+        "坪數": area, "樓層": floor, "地址": address, "社區": community or None,
+        "標籤": json.loads(tags or "[]"), "聯絡人": contact, "591更新": refresh_time,
+        "瀏覽": views, "首次看到": first, "最後看到": last, "編號": lid,
+    } for lid, price, title, layout, area, floor, address, community, tags, contact,
+        refresh_time, views, url, first, last in rows]
     write_json("listings.json", {
         "更新時間": now(),
         "條件": LIST_URL,
-        "在架數": len(rows),
-        "物件": [{
-            "租金": price, "標題": title, "網址": url, "格局": layout, "坪數": area,
-            "樓層": floor, "地址": address, "社區": community or None,
-            "標籤": json.loads(tags or "[]"), "聯絡人": contact, "591更新": refresh_time,
-            "瀏覽": views, "首次看到": first, "最後看到": last, "編號": lid,
-        } for lid, price, title, layout, area, floor, address, community, tags, contact,
-            refresh_time, views, url, first, last in rows],
+        "在架數": len(listings),
+        "物件": listings,
+    })
+
+    groups = {}
+    for it in listings:
+        groups.setdefault(it["區"], []).append(it)
+    order = sorted(groups, key=lambda d: (-len(groups[d]), d))  # 物件多的區排前面
+
+    def overview(items):
+        prices = [it["租金"] for it in items if it["租金"]]
+        return {"數量": len(items),
+                "最低租金": min(prices) if prices else None,
+                "平均租金": round(sum(prices) / len(prices)) if prices else None,
+                "最高租金": max(prices) if prices else None}
+
+    write_json("by_district.json", {
+        "更新時間": now(),
+        "條件": LIST_URL,
+        "在架數": len(listings),
+        "各區概況": {d: overview(groups[d]) for d in order},
+        "分區物件": {d: [{k: v for k, v in it.items() if k != "區"} for it in groups[d]]
+                 for d in order},
     })
     events = db.execute("""SELECT e.ts, e.kind, e.detail, e.id FROM events e
         ORDER BY e.rowid DESC LIMIT 200""").fetchall()
