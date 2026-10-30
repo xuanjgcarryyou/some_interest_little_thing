@@ -28,7 +28,7 @@ LIST_URL = os.environ.get("LIST_URL", "").strip() or DEFAULT_LIST_URL
 INTERVAL = int(os.environ.get("INTERVAL_SECONDS", "600"))
 JITTER = int(os.environ.get("JITTER_SECONDS", "120"))  # 每輪間隔 = INTERVAL ± JITTER 隨機
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "20"))
-PAGE_DELAY = float(os.environ.get("PAGE_DELAY_SECONDS", "4"))
+PAGE_DELAY = float(os.environ.get("PAGE_DELAY_SECONDS", "10"))
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 EXPORT_DIR = os.environ.get("EXPORT_DIR", "/output")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
@@ -96,6 +96,10 @@ def api_params(list_url):
     return p
 
 
+class ApiRefused(RuntimeError):
+    """API 回 status != 1（多半是請求太密被暫時擋），馬上重試只會一直被擋，整輪放棄。"""
+
+
 def fetch_json(params, retries=3):
     url = API + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={
@@ -104,18 +108,21 @@ def fetch_json(params, retries=3):
         "Origin": "https://rent.591.com.tw",
         "Accept": "application/json",
     })
+    page = f"firstRow={params.get('firstRow')}"
     for attempt in range(1, retries + 1):
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
-                body = json.load(r)
+                raw = r.read()
+            body = json.loads(raw)
             if body.get("status") != 1:
-                raise RuntimeError(f"API status={body.get('status')} {body.get('msg')}")
+                raise ApiRefused(f"{page} 回傳 status={body.get('status')}："
+                                 f"{raw[:200].decode('utf-8', 'replace')}")
             return body["data"]
-        except (urllib.error.URLError, RuntimeError, ValueError, TimeoutError) as e:
+        except (urllib.error.URLError, ValueError, TimeoutError) as e:
             wait = 30 * attempt
             if isinstance(e, urllib.error.HTTPError) and e.code in (403, 429):
                 wait = 300 * attempt
-            log(f"[錯誤] 第 {attempt} 次請求失敗：{e}；{wait} 秒後重試")
+            log(f"[錯誤] {page} 第 {attempt} 次請求失敗：{e}；{wait} 秒後重試")
             if attempt == retries:
                 raise
             time.sleep(wait)
@@ -231,10 +238,13 @@ def run_once(db, base):
                 alerts.append(f"{arrow} **{old[0]} → {price}** {summary(price, it)}\n<{url}>")
 
     removed = 0
+    active = db.execute("SELECT id, title FROM listings WHERE removed_at IS NULL").fetchall()
+    if not seen and active:
+        # 591 出狀況時可能回 0 筆，照算會把全部物件判成下架
+        log(f"[注意] API 回傳 0 筆，但還有 {len(active)} 筆在架，這輪不判定下架")
     # 只有完整抓到全部筆數時才判定下架，避免抓一半誤判
-    if complete and len(seen) >= total:
-        for lid, title in db.execute(
-                "SELECT id, title FROM listings WHERE removed_at IS NULL").fetchall():
+    elif complete and len(seen) >= total:
+        for lid, title in active:
             if lid not in seen:
                 db.execute("UPDATE listings SET removed_at=? WHERE id=?", (ts, lid))
                 db.execute("INSERT INTO events VALUES (?,?,?,?)", (ts, "removed", lid, title))
@@ -325,6 +335,8 @@ def main():
     while True:
         try:
             run_once(db, base)
+        except ApiRefused as e:
+            log(f"[本輪略過] 591 暫時不給資料，下一輪再試：{e}")
         except Exception as e:  # 單次失敗不要讓整個服務掛掉
             log(f"[本輪失敗] {type(e).__name__}: {e}")
         if os.environ.get("RUN_ONCE"):
